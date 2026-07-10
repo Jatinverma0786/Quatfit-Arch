@@ -26,6 +26,7 @@ class QuatfitSpeculativeDecoder:
         orig_checkpoints = self.model.checkpoints
         orig_use_adaptive = self.model.use_adaptive
         
+        orig_thresholds = self.model.adaptive_controller.thresholds.clone()
         try:
             self.model.checkpoints = [self.draft_exit_layer]
             self.model.use_adaptive = True

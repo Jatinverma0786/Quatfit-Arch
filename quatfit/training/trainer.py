@@ -77,12 +77,18 @@ class QuatfitTrainer:
         self.model.train()
         
         # Retrieve batch
-        inputs, targets = self.dataloader.get_batch(device=self.device)
+        batch = self.dataloader.get_batch(device=self.device)
         
         # Forward pass with mixed-precision
         with torch.amp.autocast('cuda', enabled=self.use_amp):
-            outputs = self.model(inputs)
-            loss, metrics = self.loss_fn(outputs, targets)
+            if len(batch) == 3:
+                inputs, targets, mask = batch
+                outputs = self.model(inputs)
+                loss, metrics = self.loss_fn(outputs, targets, loss_mask=mask)
+            else:
+                inputs, targets = batch
+                outputs = self.model(inputs)
+                loss, metrics = self.loss_fn(outputs, targets)
             # Scale loss for gradient accumulation
             loss = loss / self.gradient_accumulation_steps
         

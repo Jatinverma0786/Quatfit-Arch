@@ -246,37 +246,43 @@ class QuatfitHierarchicalMemory(nn.Module):
             keys = self.archive_memory.key_proj(x)
             values = self.archive_memory.value_proj(x)
             
+            max_size = getattr(self.config, 'max_archive_size', 10000)
+            batch_new_k, batch_new_v = [], []
+            max_len = 0
+            
             for b in range(batch_size):
-                # Filter tokens for this batch element
                 mask = high_surprise_mask[b]
                 if mask.any():
-                    new_b_keys = keys[b, mask] # [num_new, key_dim]
-                    new_b_values = values[b, mask] # [num_new, hidden_size]
+                    new_b_keys = keys[b, mask]
+                    new_b_values = values[b, mask]
                     
-                    if new_keys is None:
-                        new_k = new_b_keys
-                        new_v = new_b_values
-                    else:
-                        new_k = torch.cat([new_keys[b], new_b_keys], dim=0)
-                        new_v = torch.cat([new_values[b], new_b_values], dim=0)
+                    # concatenate with old keys if existing
+                    if archive_keys is not None:
+                        new_b_keys = torch.cat([archive_keys[b], new_b_keys], dim=0)
+                        new_b_values = torch.cat([archive_values[b], new_b_values], dim=0)
                         
-                    # Limit archive size (eviction policy: keep latest)
-                    max_size = getattr(self.config, 'max_archive_size', 10000)
-                    if new_k.size(0) > max_size:
-                        new_k = new_k[-max_size:]
-                        new_v = new_v[-max_size:]
-                        
-                    # Stack back
-                    if b == 0:
-                        stacked_keys = new_k.unsqueeze(0)
-                        stacked_values = new_v.unsqueeze(0)
-                    else:
-                        stacked_keys = torch.cat([stacked_keys, new_k.unsqueeze(0)], dim=0)
-                        stacked_values = torch.cat([stacked_values, new_v.unsqueeze(0)], dim=0)
-                        
-            if high_surprise_mask.any():
-                new_keys = stacked_keys
-                new_values = stacked_values
+                    if new_b_keys.size(0) > max_size:
+                        new_b_keys = new_b_keys[-max_size:]
+                        new_b_values = new_b_values[-max_size:]
+                else:
+                    new_b_keys = archive_keys[b] if archive_keys is not None else keys.new_zeros(0, keys.size(-1))
+                    new_b_values = archive_values[b] if archive_values is not None else values.new_zeros(0, values.size(-1))
+                    
+                batch_new_k.append(new_b_keys)
+                batch_new_v.append(new_b_values)
+                max_len = max(max_len, new_b_keys.size(0))
+            
+            # Pad to max_len
+            stacked_keys = torch.zeros(batch_size, max_len, keys.size(-1), device=x.device, dtype=x.dtype)
+            stacked_values = torch.zeros(batch_size, max_len, values.size(-1), device=x.device, dtype=x.dtype)
+            for b in range(batch_size):
+                k_len = batch_new_k[b].size(0)
+                if k_len > 0:
+                    stacked_keys[b, -k_len:] = batch_new_k[b]
+                    stacked_values[b, -k_len:] = batch_new_v[b]
+            
+            new_keys = stacked_keys
+            new_values = stacked_values
                 
         # Normalize integration weights
         norm_weights = F.softmax(self.weights, dim=0)

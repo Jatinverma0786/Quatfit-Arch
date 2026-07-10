@@ -1,13 +1,14 @@
 import torch
 import torch.nn as nn
 from typing import Dict, List, Optional, Tuple
+from quatfit.model.dynamic_precision import DynamicLinear
 
 class LoraLinear(nn.Module):
     """
     Low-Rank Adaptation (LoRA) layer wrapped around a standard Linear layer.
     Allows dynamic switching and parameter updates without freezing base weights.
     """
-    def __init__(self, base_layer: nn.Linear, r: int = 16, alpha: int = 32):
+    def __init__(self, base_layer: nn.Module, r: int = 16, alpha: int = 32):
         super().__init__()
         self.base_layer = base_layer
         self.r = r
@@ -79,7 +80,7 @@ class QuatfitContinualLearningManager:
                 for sub_name in ["q_proj", "k_proj", "v_proj", "q_up_proj", "k_up_proj", "v_up_proj"]:
                     if hasattr(module, sub_name):
                         orig_linear = getattr(module, sub_name)
-                        if isinstance(orig_linear, nn.Linear):
+                        if isinstance(orig_linear, (nn.Linear, DynamicLinear)):
                             setattr(module, sub_name, LoraLinear(orig_linear, r=r, alpha=alpha))
         print("LoRA adapters successfully injected into attention modules.")
 
@@ -136,7 +137,7 @@ class QuatfitContinualLearningManager:
             
             # 1. Synthesize input and generate rollouts
             if getattr(self, 'tokenizer', None) is not None:
-                input_ids = self.tokenizer(prompt, return_tensors="pt").input_ids
+                input_ids = torch.tensor([self.tokenizer.encode(prompt)], dtype=torch.long)
             else:
                 input_ids = torch.randint(0, 10000, (1, 8))
             
@@ -150,13 +151,13 @@ class QuatfitContinualLearningManager:
                     output_ids = torch.cat([input_ids, torch.randint(0, 10000, (1, 20))], dim=-1)
                 
                 if getattr(self, 'tokenizer', None) is not None:
-                    response_text = self.tokenizer.decode(output_ids[0])
+                    response_text = self.tokenizer.decode(output_ids[0].tolist())
                 else:
                     response_text = str(output_ids.tolist())
                     
                 rollouts.append(response_text)
                 
-                logits = self.model(output_ids)
+                logits = self.model(output_ids)["logits"]
                 log_probs_list.append(logits.mean())
                 
             # 2. Call rewards_fn to get rewards
@@ -198,13 +199,13 @@ class QuatfitContinualLearningManager:
         with torch.no_grad():
             for prompt, gt in zip(test_prompts, base_ground_truth):
                 if getattr(self, 'tokenizer', None) is not None:
-                    input_ids = self.tokenizer(prompt, return_tensors="pt").input_ids
-                    target_ids = self.tokenizer(gt, return_tensors="pt").input_ids
+                    input_ids = torch.tensor([self.tokenizer.encode(prompt)], dtype=torch.long)
+                    target_ids = torch.tensor([self.tokenizer.encode(gt)], dtype=torch.long)
                 else:
                     input_ids = torch.randint(0, 10000, (1, 10))
                     target_ids = torch.randint(0, 10000, (1, 10))
                 
-                logits = self.model(input_ids)
+                logits = self.model(input_ids)["logits"]
                 
                 seq_len = min(logits.size(1), target_ids.size(1))
                 logits_trunc = logits[:, :seq_len, :]

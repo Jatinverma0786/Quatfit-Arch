@@ -9,6 +9,7 @@ from quatfit.model.memory import QuatfitHierarchicalMemory
 from quatfit.model.cot_verifier import QuatfitCoTVerifier
 from quatfit.model.output_head import QuatfitOutputHead
 from quatfit.model.normalization import RMSNorm
+from quatfit.serving.paged_cache import PagedKVCacheManager
 
 class QuatfitModel(nn.Module):
     """
@@ -60,6 +61,7 @@ class QuatfitModel(nn.Module):
             
         # Chain-of-Thought Verifier
         self.use_verifier = config.use_cot_verifier
+        self.step_separator_token_id = config.step_separator_token_id
         if self.use_verifier:
             self.verifier = QuatfitCoTVerifier(config)
 
@@ -93,7 +95,13 @@ class QuatfitModel(nn.Module):
         bsz, seq_len = input_ids.shape
         
         if position_ids is None:
-            past_length = past_key_values[0][0].shape[-2] if past_key_values is not None and past_key_values[0] is not None else 0
+            if past_key_values is not None:
+                if isinstance(past_key_values[0], PagedKVCacheManager):
+                    past_length = past_key_values[0].context_lengths[0] if len(past_key_values[0].context_lengths) > 0 else 0
+                else:
+                    past_length = past_key_values[0][0].shape[-2] if past_key_values[0] is not None else 0
+            else:
+                past_length = 0
             position_ids = torch.arange(past_length, past_length + seq_len, dtype=torch.long, device=input_ids.device).unsqueeze(0).expand(bsz, -1)
             
         # 1. Embed input tokens
@@ -170,7 +178,11 @@ class QuatfitModel(nn.Module):
                     active_mask = new_active
                     
                     # If all tokens have exited, break early!
+                    # Note: Adaptive early exit currently only yields FLOP savings when the *entire* batch exits early. True per-token dropping requires complex sparse scatter/gather routing which is not implemented.
                     if not active_mask.any():
+                        if use_cache:
+                            for j in range(i + 1, self.num_layers):
+                                new_past_key_values.append(past_key_values[j] if past_key_values else None)
                         break
 
         # Final projection layer
@@ -188,7 +200,7 @@ class QuatfitModel(nn.Module):
         # Optional Chain-of-Thought verifier
         verifier_logits = None
         if self.use_verifier and return_verifier:
-            verifier_logits = self.verifier(normed_hidden)
+            verifier_logits = self.verifier(normed_hidden, input_ids=input_ids, step_separator_token_id=self.step_separator_token_id)
             
         return {
             "logits": final_logits,

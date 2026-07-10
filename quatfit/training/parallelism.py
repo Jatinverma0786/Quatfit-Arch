@@ -26,6 +26,7 @@ class QuatfitParallelismManager:
             self.rank = 0
             
         self.dp_size = self.world_size // (self.tp_size * self.pp_size)
+        assert self.dp_size % self.ep_size == 0, "DP size must be divisible by EP size"
         
         # Parallel group holders
         self.tp_group = None

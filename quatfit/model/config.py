@@ -5,6 +5,7 @@ from typing import Optional, List
 class QuatfitConfig:
     # Basic parameters
     vocab_size: int = 256000
+    step_separator_token_id: int = 100
     hidden_size: int = 4096
     num_hidden_layers: int = 48
     num_dense_layers: int = 4  # The first N layers are dense
@@ -136,6 +137,7 @@ class QuatfitConfig:
             )
         elif size == "pro":
             return cls(
+                attention_type="mla",
                 hidden_size=6144,
                 num_hidden_layers=64,
                 num_dense_layers=4,
@@ -157,6 +159,7 @@ class QuatfitConfig:
             )
         elif size == "ultra":
             return cls(
+                attention_type="mla",
                 hidden_size=7168,
                 num_hidden_layers=72,
                 num_dense_layers=6,

@@ -64,3 +64,23 @@ class QuatfitExporter:
                 
         torch.save(quantized_dict, output_path)
         print("Quantized model export complete.")
+
+    def load_quantized(self, input_path: str):
+        """
+        Reverses INT8 quantization and loads the weights back into the model.
+        """
+        print(f"Loading quantized model from {input_path}...")
+        device = self.model.device if hasattr(self.model, 'device') else 'cpu'
+        quantized_dict = torch.load(input_path, map_location=device, weights_only=True)
+        
+        state_dict = {}
+        for name, q_w in quantized_dict.items():
+            if not name.endswith("_scale"):
+                if name + "_scale" in quantized_dict:
+                    scale = quantized_dict[name + "_scale"]
+                    state_dict[name] = q_w.to(torch.float32) * scale
+                else:
+                    state_dict[name] = q_w
+                    
+        self.model.load_state_dict(state_dict, strict=False)
+        print("Quantized model loaded successfully.")

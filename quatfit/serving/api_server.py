@@ -2,6 +2,7 @@ import json
 import torch
 from typing import Dict, Any, List, Optional
 from quatfit.model.quatfit_model import QuatfitModel
+from quatfit.serving.paged_cache import PagedKVCacheManager
 
 class QuatfitAPIServer:
     """
@@ -42,10 +43,19 @@ class QuatfitAPIServer:
         # Decide which model to run
         model = self.route_request(prompt, domain=domain)
         
-        input_ids = self.tokenizer.encode(prompt)
+        input_ids = torch.tensor([self.tokenizer.encode(prompt)], dtype=torch.long)
+        
+        # Create a dummy cache manager
+        dummy_cache = PagedKVCacheManager(
+            num_blocks=16, 
+            num_heads=model.config.num_heads if hasattr(model, 'config') else 8, 
+            block_size=16, 
+            head_dim=64
+        )
+        
         # Generate new tokens
-        output_ids = model.generate(input_ids, max_new_tokens=50)
-        response_text = self.tokenizer.decode(output_ids)
+        output_ids = model.generate(input_ids, max_new_tokens=50, past_key_values=dummy_cache)
+        response_text = self.tokenizer.decode(output_ids[0].tolist())
         
         mock_response = {
             "id": "chatcmpl-123",

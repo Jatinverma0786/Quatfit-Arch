@@ -20,7 +20,7 @@ class SimpleBPETokenizer:
     def train(self, corpus: str):
         print("Training BPE tokenizer on corpus...")
         # Clean and split corpus into words
-        words = re.findall(r"\w+|[^\w\s]", corpus, re.UNICODE)
+        words = re.findall(r"\w+|\s+|[^\w\s]", corpus, re.UNICODE)
         
         # Word counts
         word_counts = Counter(words)
@@ -83,7 +83,7 @@ class SimpleBPETokenizer:
         if text in self.encoder:
             return [self.encoder[text]]
             
-        words = re.findall(r"\w+|[^\w\s]", text, re.UNICODE)
+        words = re.findall(r"\w+|\s+|[^\w\s]", text, re.UNICODE)
         token_ids = [self.encoder["<bos>"]]
         
         if not hasattr(self, 'merge_ranks'):

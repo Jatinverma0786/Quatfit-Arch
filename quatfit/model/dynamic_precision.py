@@ -6,7 +6,7 @@ import torch.nn.functional as F
 class DynamicLinear(nn.Module):
     """
     A linear layer that supports dynamic precision casting for its forward pass.
-    Simulates or utilizes lower precision formats like FP8 or INT8 if specified.
+    This is just a Quantization-Aware Training (QAT) simulation and doesn't actually save compute because Triton kernels aren't implemented.
     """
     def __init__(self, in_features: int, out_features: int, bias: bool = False, precision: str = "fp32"):
         super().__init__()

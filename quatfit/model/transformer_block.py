@@ -48,11 +48,6 @@ class QuatfitTransformerBlock(nn.Module):
             new_past_key_value: Cached keys/values
             loads: Expert load fractions (if MoE layer)
         """
-        # Layer dropout for adaptive computation (only drop MoE blocks to preserve dense backbone)
-        if self.is_moe and self.training and torch.rand(1).item() < self.layer_dropout_prob:
-            # Skip computation, return residual connection with unchanged KV cache
-            return hidden_states, past_key_value, None
-            
         # Attention block (Pre-norm)
         normed_hidden = self.input_layernorm(hidden_states)
         attn_outputs, new_past_key_value = self.self_attn(
@@ -68,10 +63,13 @@ class QuatfitTransformerBlock(nn.Module):
         normed_hidden = self.post_attention_layernorm(hidden_states)
         
         loads = None
-        if self.is_moe:
-            ffn_outputs, loads = self.moe(normed_hidden)
+        if self.is_moe and self.training and torch.rand(1).item() < self.layer_dropout_prob:
+            ffn_outputs, loads = torch.zeros_like(normed_hidden), None
         else:
-            ffn_outputs = self.dense_ffn(normed_hidden)
+            if self.is_moe:
+                ffn_outputs, loads = self.moe(normed_hidden)
+            else:
+                ffn_outputs = self.dense_ffn(normed_hidden)
             
         hidden_states = hidden_states + ffn_outputs
         

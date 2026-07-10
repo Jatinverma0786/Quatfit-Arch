@@ -38,12 +38,16 @@ class SpecializedTrainingManager:
                 # Baseline memory summary
                 mem_summary = torch.mean(hidden_states, dim=1)
                 if self.model.use_memory:
-                    hidden_states, _, _, _ = self.model.memory_system(hidden_states)
+                    memory_output, _, _, _ = self.model.memory_system(hidden_states, mode='residual')
+                    hidden_states = hidden_states + memory_output
                     
                 active_mask = torch.ones(inputs.size(0), inputs.size(1), dtype=torch.bool, device=self.device)
                 
+                bsz, seq_len, _ = hidden_states.shape
+                position_ids = torch.arange(seq_len).unsqueeze(0).expand(bsz, -1).to(self.device)
+                
                 for i, layer in enumerate(self.model.layers):
-                    hidden_states, _, _ = layer(hidden_states, position_ids=None)
+                    hidden_states, _, _ = layer(hidden_states, position_ids=position_ids)
                     
                     if self.model.use_adaptive and (i + 1) in self.model.checkpoints:
                         chk_idx = self.model.checkpoints.index(i + 1)
@@ -119,7 +123,7 @@ class SpecializedTrainingManager:
         print(f"YaRN positional scaling set to {scale:.2f}x (Context extended to {target_context_len} tokens)")
 
     # 4. Hierarchical Memory Tuner
-    def train_memory_surprise_gate_step(self, x: torch.Tensor) -> torch.Tensor:
+    def train_memory_surprise_gate_step(self, x: torch.Tensor, prev_persistent: torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Trains the surprise gate predictor to minimize state reconstruction error
         over typical inputs (teaches it what is 'normal' vs 'surprising').
@@ -127,11 +131,17 @@ class SpecializedTrainingManager:
         assert self.model.use_memory, "Memory system is not enabled"
         self.model.memory_system.train()
         
-        mem_summary = torch.mean(x, dim=1)
+        batch_size, _, hidden_dim = x.shape
+        if prev_persistent is None:
+            prev_persistent = torch.zeros(batch_size, hidden_dim, device=x.device)
         
         # Predict states
-        predicted_x = self.model.memory_system.surprise_gate.predictor(mem_summary.unsqueeze(1))
+        predicted_x = self.model.memory_system.surprise_gate.predictor(prev_persistent.unsqueeze(1))
+        
+        # Update persistent state (simplified for training step)
+        mem_summary = torch.mean(x, dim=1)
+        new_persistent = prev_persistent + mem_summary
         
         # Reconstruction loss (MSE)
         loss = F.mse_loss(predicted_x, x)
-        return loss
+        return loss, new_persistent

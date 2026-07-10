@@ -40,6 +40,8 @@ class YaRNScaledRotaryEmbedding(nn.Module):
         self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
 
     def forward(self, x: torch.Tensor, seq_len: int = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        if seq_len is None:
+            seq_len = x.shape[-2]
         if seq_len > self.max_seq_len_cached:
             self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
         
@@ -175,29 +177,28 @@ class QuatfitAttention(nn.Module):
             if past_key_value is not None:
                 if isinstance(past_key_value, PagedKVCacheManager):
                     cache = past_key_value
+                    seq_len_to_add = k.shape[2]
                     for b in range(bsz):
                         start_pos = cache.context_lengths[b]
-                        seq_len_to_add = k.shape[2]
-                        for i in range(seq_len_to_add):
-                            pos = start_pos + i
-                            block_idx = cache.block_tables[b][pos // cache.block_size]
-                            offset = pos % cache.block_size
-                            cache.key_cache[block_idx, :, offset, :] = k[b, :, i, :]
-                            cache.value_cache[block_idx, :, offset, :] = v[b, :, i, :]
+                        seq_pos = torch.arange(start_pos, start_pos + seq_len_to_add, device=k.device)
+                        block_indices = torch.tensor(cache.block_tables[b], device=k.device)[seq_pos // cache.block_size]
+                        offsets = seq_pos % cache.block_size
+                        
+                        cache.key_cache.transpose(0, 1)[:, block_indices, offsets, :] = k[b]
+                        cache.value_cache.transpose(0, 1)[:, block_indices, offsets, :] = v[b]
+                        
                         cache.context_lengths[b] += seq_len_to_add
                         
                     full_k, full_v = [], []
                     for b in range(bsz):
                         seq_len = cache.context_lengths[b]
-                        blocks = cache.block_tables[b]
-                        k_b, v_b = [], []
-                        for i in range(seq_len):
-                            block_idx = blocks[i // cache.block_size]
-                            offset = i % cache.block_size
-                            k_b.append(cache.key_cache[block_idx, :, offset, :])
-                            v_b.append(cache.value_cache[block_idx, :, offset, :])
-                        full_k.append(torch.stack(k_b, dim=1))
-                        full_v.append(torch.stack(v_b, dim=1))
+                        seq_pos = torch.arange(seq_len, device=k.device)
+                        block_indices = torch.tensor(cache.block_tables[b], device=k.device)[seq_pos // cache.block_size]
+                        offsets = seq_pos % cache.block_size
+                        
+                        full_k.append(cache.key_cache.transpose(0, 1)[:, block_indices, offsets, :])
+                        full_v.append(cache.value_cache.transpose(0, 1)[:, block_indices, offsets, :])
+                        
                     k = torch.stack(full_k, dim=0)
                     v = torch.stack(full_v, dim=0)
                     
@@ -242,30 +243,28 @@ class QuatfitAttention(nn.Module):
             if past_key_value is not None:
                 if isinstance(past_key_value, PagedKVCacheManager):
                     cache = past_key_value
+                    seq_len_to_add = kv_compressed.shape[2]
                     for b in range(bsz):
                         start_pos = cache.context_lengths[b]
-                        seq_len_to_add = kv_compressed.shape[2]
-                        for i in range(seq_len_to_add):
-                            pos = start_pos + i
-                            block_idx = cache.block_tables[b][pos // cache.block_size]
-                            offset = pos % cache.block_size
-                            cache.key_cache[block_idx, :, offset, :kv_compressed.shape[-1]] = kv_compressed[b, :, i, :]
-                            cache.value_cache[block_idx, :, offset, :k_rope.shape[-1]] = k_rope[b, :, i, :]
+                        seq_pos = torch.arange(start_pos, start_pos + seq_len_to_add, device=kv_compressed.device)
+                        block_indices = torch.tensor(cache.block_tables[b], device=kv_compressed.device)[seq_pos // cache.block_size]
+                        offsets = seq_pos % cache.block_size
+                        
+                        cache.key_cache.transpose(0, 1)[:, block_indices, offsets, :kv_compressed.shape[-1]] = kv_compressed[b]
+                        cache.value_cache.transpose(0, 1)[:, block_indices, offsets, :k_rope.shape[-1]] = k_rope[b]
+                        
                         cache.context_lengths[b] += seq_len_to_add
                         
                     full_kv, full_k_rope = [], []
                     for b in range(bsz):
                         seq_len = cache.context_lengths[b]
-                        blocks = cache.block_tables[b]
-                        kv_b, k_rope_b = [], []
-                        for i in range(seq_len):
-                            block_idx = blocks[i // cache.block_size]
-                            offset = i % cache.block_size
-                            kv_b.append(cache.key_cache[block_idx, :, offset, :kv_compressed.shape[-1]])
-                            k_rope_b.append(cache.value_cache[block_idx, :, offset, :k_rope.shape[-1]])
-                        full_kv.append(torch.stack(kv_b, dim=1))
-                        full_k_rope.append(torch.stack(k_rope_b, dim=1))
-                    
+                        seq_pos = torch.arange(seq_len, device=kv_compressed.device)
+                        block_indices = torch.tensor(cache.block_tables[b], device=kv_compressed.device)[seq_pos // cache.block_size]
+                        offsets = seq_pos % cache.block_size
+                        
+                        full_kv.append(cache.key_cache.transpose(0, 1)[:, block_indices, offsets, :kv_compressed.shape[-1]])
+                        full_k_rope.append(cache.value_cache.transpose(0, 1)[:, block_indices, offsets, :k_rope.shape[-1]])
+                        
                     cached_kv_compressed = torch.stack(full_kv, dim=0)
                     cached_k_rope = torch.stack(full_k_rope, dim=0)
                     new_past_key_value = cache if use_cache else None
